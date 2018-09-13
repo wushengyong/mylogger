@@ -12,4 +12,18 @@
 
 
 
+#define _ATL_ATTRIBUTES
+#define _AFX_ALL_WARNINGS
+#define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS
+
+//////////////////////////////////////////////////////////////////////////////////
+
+//MFC 文件
+#include <AfxWin.h>
+#include <AfxExt.h>
+#include <AfxCmn.h>
+#include <AfxDisp.h>
+#include <Windows.h>
 // TODO:  在此处引用程序需要的其他头文件
+#define LOG_SETTING_APP_NAME TEXT("OxLand")
+#include "Logger.h"

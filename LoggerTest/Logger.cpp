@@ -41,6 +41,7 @@ CLogger::CLogger()
 	m_LastLoadSettingTime = 0;
 
 	m_strLogDir = LOG_DIR;
+	m_strCurConfPath = GetConfFilePath();
 	::InitializeCriticalSection(&m_Mutex);
 }
 
@@ -77,7 +78,7 @@ tstring CLogger::GetCurrentLogFilePath() const
 
 	_sntprintf_s(szFileName, MAX_PATH, TEXT("%s\\[%04d-%02d-%02d]%s%s"),
 		m_strLogDir.c_str(),
-		LocalTime.tm_year + 1900, LocalTime.tm_mon, LocalTime.tm_mday + 1,
+		LocalTime.tm_year + 1900, LocalTime.tm_mon + 1, LocalTime.tm_mday,
 		m_strLogFileName.c_str(),
 		LOG_SUFFIX);
 
@@ -95,7 +96,7 @@ void CLogger::LoadSettings()
 
 	TCHAR szLogSettings[MAX_PATH] = { 0 };
 	/// 获取日志级别
-	::GetPrivateProfileString(LOG_SETTING_APP_NAME, LOG_LEVEL_NAME, TEXT(""), szLogSettings, MAX_PATH, LOG_SETTING_CONF_FILE);
+	::GetPrivateProfileString(LOG_SETTING_APP_NAME, LOG_LEVEL_NAME, TEXT(""), szLogSettings, MAX_PATH, m_strCurConfPath.c_str());
 	if (_tcslen(szLogSettings) != 0) {
 		for (int nLevel = 0; g_DebugLevel_Str[nLevel] != NULL; nLevel++)
 		{
@@ -106,12 +107,12 @@ void CLogger::LoadSettings()
 		}
 	}
 	/// 获取重新读取设置的时间
-	int nSecs = (int)::GetPrivateProfileInt(LOG_SETTING_APP_NAME, LOG_RELOAD_TIME, -1, LOG_SETTING_CONF_FILE);
+	int nSecs = (int)::GetPrivateProfileInt(LOG_SETTING_APP_NAME, LOG_RELOAD_TIME, -1, m_strCurConfPath.c_str());
 	if (nSecs >= 0) {
 		m_nReloadSettings = nSecs;
 	}
 	/// 获取输出的日志的目录
-	::GetPrivateProfileString(LOG_SETTING_APP_NAME, LOG_DIR_NAME, LOG_DIR, szLogSettings, MAX_PATH, LOG_SETTING_CONF_FILE);
+	::GetPrivateProfileString(LOG_SETTING_APP_NAME, LOG_DIR_NAME, LOG_DIR, szLogSettings, MAX_PATH, m_strCurConfPath.c_str());
 	m_strLogDir = szLogSettings;
 
 	m_LastLoadSettingTime = CurTime;
@@ -153,10 +154,11 @@ void CLogger::Log(const TCHAR* pFuncName, int nLine, int nLevel, const TCHAR* pF
 	CAutoLogLock Lock(&m_Mutex);
 	LoadSettings(); /// 加载配置
 	if (m_nLogLevel == 0 || nLevel < m_nLogLevel) return; /// 级别不需要写日志
+
 	if (m_strLogFileName.empty()) return; /// 没有设置文件名，不打印日志
 
 	TCHAR szLogBuff[MAX_PATH] = { 0 };
-	_vstprintf_s(szLogBuff, MAX_PATH, pFormat,args);
+	_vsntprintf(szLogBuff, MAX_PATH - 1, pFormat, args);
 
 	/// 格式化输出信息
 
@@ -175,13 +177,13 @@ void CLogger::Log(const TCHAR* pFuncName, int nLine, int nLevel, const TCHAR* pF
 	}
 
 	if (nLine >= 0) {
-		_sntprintf_s(szLogFmtBuff, MAX_PATH * 2, TEXT("[%04d-%02d-%02d %02d:%02d:%02d][%-5s][%s][L%d] %s\r\n"),
+		_sntprintf_s(szLogFmtBuff, MAX_PATH * 2, TEXT("[%04d-%02d-%02d %02d:%02d:%02d][%-5s][%s][L%d] %s\n"),
 			LocalTime.tm_year + 1900, LocalTime.tm_mon + 1, LocalTime.tm_mday,
 			LocalTime.tm_hour, LocalTime.tm_min, LocalTime.tm_sec,
 			pLevelStr, (NULL == pFuncName ? TEXT("") : pFuncName), nLine, szLogBuff);
 	}
 	else {
-		_sntprintf_s(szLogFmtBuff, MAX_PATH * 2, TEXT("[%04d-%02d-%02d %02d:%02d:%02d][%-5s] %s\r\n"),
+		_sntprintf_s(szLogFmtBuff, MAX_PATH * 2, TEXT("[%04d-%02d-%02d %02d:%02d:%02d][%-5s] %s\n"),
 			LocalTime.tm_year + 1900, LocalTime.tm_mon + 1, LocalTime.tm_mday,
 			LocalTime.tm_hour, LocalTime.tm_min, LocalTime.tm_sec, pLevelStr, szLogBuff);
 	}
@@ -189,35 +191,26 @@ void CLogger::Log(const TCHAR* pFuncName, int nLine, int nLevel, const TCHAR* pF
 	/// 写入到文件中
 	tstring strFilePath = GetCurrentLogFilePath();
 
-	HANDLE hFileHandle = ::CreateFile(strFilePath.c_str(),
-		GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS,
-		FILE_ATTRIBUTE_NORMAL, NULL);
 
-	if (hFileHandle != INVALID_HANDLE_VALUE){
-		DWORD dwWriteBytes = _tcslen(szLogFmtBuff);
-		LPVOID pBuff = (LPVOID)szLogFmtBuff;
-		/// 将文本转为ascii
-#ifdef _UNICODE
-		dwWriteBytes = ::WideCharToMultiByte(CP_ACP, NULL,
-			szLogFmtBuff, -1, NULL, NULL, NULL, FALSE);
-		if (dwWriteBytes <= 0){
-			::CloseHandle(hFileHandle);
-			return;
-		}
-		std::vector<char> vecBuf;
-		vecBuf.resize(dwWriteBytes);
-		::WideCharToMultiByte(CP_ACP, NULL, szLogFmtBuff, -1, &vecBuf[0], dwWriteBytes, NULL, FALSE);
-		pBuff = (LPVOID)&vecBuf[0];
-		dwWriteBytes--; /// 去除字符串末尾的0
-#endif
-		::SetFilePointer(hFileHandle, 0, NULL, FILE_END); /// 移动到文件尾部
-		DWORD dwHaveWrite = 0;
-		while (dwHaveWrite < dwWriteBytes) {
-			::WriteFile(hFileHandle, pBuff, dwWriteBytes, &dwHaveWrite, NULL);
-			dwWriteBytes -= dwHaveWrite;
-			pBuff = (LPVOID)((const BYTE*)pBuff + dwHaveWrite);
-			dwHaveWrite = 0;
-		}
-		::CloseHandle(hFileHandle);
+	FILE* pLogFileHandle = ::_tfsopen(strFilePath.c_str(), TEXT("a,ccs=UTF-8"), _SH_SECURE);
+
+	if (pLogFileHandle != NULL)
+	{
+		::_fputts(szLogFmtBuff, pLogFileHandle);
+		::fclose(pLogFileHandle);
 	}
+}
+
+/// 判断配置文件是相对路径还是决定路径
+tstring CLogger::GetConfFilePath()
+{
+	TCHAR szFilePath[MAX_PATH] = { 0 };
+	::GetModuleFileName(NULL, szFilePath, MAX_PATH);
+	TCHAR* pSubPath = NULL;
+	if ((pSubPath = _tcsrchr(szFilePath, TEXT('\\'))) != NULL)
+	{
+		++pSubPath;
+		_sntprintf(pSubPath, szFilePath + MAX_PATH - pSubPath, TEXT("%s"), LOG_SETTING_CONF_FILE);
+	}
+	return szFilePath;
 }
